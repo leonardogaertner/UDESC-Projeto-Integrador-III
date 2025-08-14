@@ -2,52 +2,65 @@ import streamlit as st
 import pandas as pd
 import os
 import matplotlib.pyplot as plt
-from fpdf import FPDF
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from reportlab.lib.styles import getSampleStyleSheet
 
-# Função para exportar tabela para PDF
+# Função para exportar tabela para PDF com quebra de página e ajuste de largura
 def exportar_pdf(df, nome_arquivo):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, txt="Relatório de Exploração de Dados", ln=True, align='C')
-    pdf.ln(10)
+    doc = SimpleDocTemplate(nome_arquivo, pagesize=landscape(A4))
+    elementos = []
+    estilos = getSampleStyleSheet()
 
-    # Configuração da tabela
-    pdf.set_font("Arial", "B", 10)
-    col_width = pdf.w / (len(df.columns) + 1)  # largura proporcional
-    row_height = 6
+    # Título
+    titulo = Paragraph("Relatório de Exploração de Dados", estilos['Title'])
+    elementos.append(titulo)
+    elementos.append(Spacer(1, 12))
 
-    # Cabeçalho
-    for col in df.columns:
-        pdf.cell(col_width, row_height, col, border=1, align='C')
-    pdf.ln(row_height)
+    # Parâmetros
+    max_colunas_por_pagina = 10  # controla quantas colunas cabem por página
+    font_size = 7  # fonte reduzida para caber mais dados
 
-    # Conteúdo da tabela
-    pdf.set_font("Arial", "", 10)
-    for _, row in df.iterrows():
-        max_height = row_height
-        # Primeiro calculamos a altura máxima necessária para esta linha
-        for col in df.columns:
-            texto = str(row[col])
-            # multi_cell quebra automaticamente, mas precisamos controlar a altura
-            lines = pdf.multi_cell(col_width, row_height, texto, border=0, align='L', split_only=True)
-            max_height = max(max_height, len(lines) * row_height)
+    # Dividir dataframe em blocos de colunas para caber na largura
+    for inicio in range(0, len(df.columns), max_colunas_por_pagina):
+        fim = inicio + max_colunas_por_pagina
+        df_bloco = df.iloc[:, inicio:fim]
 
-        # Agora desenhamos cada célula
-        x_start = pdf.get_x()
-        y_start = pdf.get_y()
-        for col in df.columns:
-            texto = str(row[col])
-            pdf.multi_cell(col_width, row_height, texto, border=1, align='L')
-            pdf.set_xy(pdf.get_x(), y_start)
-            x_start += col_width
-            pdf.set_x(x_start)
-        pdf.ln(max_height)
+        # Converter DataFrame para lista (cabeçalho + dados)
+        dados = [df_bloco.columns.tolist()] + df_bloco.astype(str).values.tolist()
 
-    pdf.output(nome_arquivo)
+        # Criar tabela
+        tabela = Table(dados, repeatRows=1)
+
+        # Largura proporcional
+        col_width = (A4[1] - 40) / len(df_bloco.columns)
+        tabela._argW = [col_width] * len(df_bloco.columns)
+
+        # Estilo da tabela
+        estilo_tabela = TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), font_size),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('GRID', (0, 0), (-1, -1), 0.25, colors.black),
+        ])
+
+        # Linhas alternadas
+        for i in range(1, len(dados)):
+            if i % 2 == 0:
+                estilo_tabela.add('BACKGROUND', (0, i), (-1, i), colors.lightgrey)
+
+        tabela.setStyle(estilo_tabela)
+        elementos.append(tabela)
+        elementos.append(PageBreak())  # nova página para próximo bloco
+
+    doc.build(elementos)
 
 st.set_page_config(page_title="Exploração dos Dados", layout="wide")
-st.title("📂 Exploração dos Dados")
+st.title("Exploração dos Dados")
 
 # Carrega dados processados
 if os.path.exists("data/microdados_processados.csv"):
@@ -61,7 +74,7 @@ else:
 df_filtrado = df.copy()
 
 # Filtros dinâmicos
-st.subheader("🎯 Filtros avançados")
+st.subheader("Filtros avançados")
 if "filtros" not in st.session_state:
     st.session_state.filtros = []
 
@@ -72,7 +85,7 @@ with st.expander("Adicionar novo filtro"):
     if coluna:
         valores_unicos = sorted(df_filtrado[coluna].dropna().unique().tolist())
         valor = col2.selectbox("Valor", valores_unicos)
-        if st.button("➕ Adicionar filtro"):
+        if st.button("Adicionar filtro"):
             st.session_state.filtros.append((coluna, valor))
 
 # Mostrar filtros aplicados
@@ -102,10 +115,11 @@ with col2:
     var_y = st.selectbox("Variável Y", df_filtrado.columns.tolist())
 
 if var_x and var_y:
-    fig, ax = plt.subplots()
-    df_filtrado.groupby(var_x)[var_y].mean().plot(kind="bar", ax=ax)
-    ax.set_ylabel(f"Média de {var_y}")
-    st.pyplot(fig)
+    df_grafico = df_filtrado.groupby(var_x, as_index=False)[var_y].mean()
+    df_grafico = df_grafico.sort_values(by=var_y, ascending=False)
+    st.bar_chart(df_grafico.set_index(var_x))
+
+
 
 # Exportar para PDF
 if st.button("📄 Exportar resultado para PDF"):
